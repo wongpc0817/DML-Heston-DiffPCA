@@ -1,0 +1,410 @@
+import tensorflow as tf2
+assert tf2.__version__ >= "2.0"
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import time
+from tqdm import tqdm_notebook
+import warnings
+warnings.filterwarnings('ignore')
+import pandas as pd 
+from tqdm import tqdm
+from multiprocessing import Pool
+from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
+from tensorflow.keras.models import load_model
+from tensorflow.keras.losses import MeanSquaredError
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Manager
+import random
+import os
+from scipy.integrate import quad_vec  # quad_vec allows to compute integrals accurately
+from scipy.stats import norm
+from scipy.stats import qmc # to perform Latin Hypercube Sampling (LHS) 
+import pandas as pd 
+
+def set_random_seed(seed=42):
+    tf.compat.v1.set_random_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress INFO and WARNING logs
+tf = tf2.compat.v1
+tf.logging.set_verbosity(tf.logging.ERROR)
+set_random_seed()
+real_type = tf.float32
+
+def beta_function(u, tau, sigma, rho, kappa):
+    return kappa - 1j * u * sigma * rho
+
+def alpha_hat_function(u):
+    return -0.5 * u * (u + 1j)
+
+def d_function(u, tau, sigma, rho, kappa):
+    gamma = 0.5 * sigma**2
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    alpha_hat = alpha_hat_function(u)
+    return np.sqrt(beta**2 - 4 * alpha_hat * gamma)
+
+def g_function(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    return (beta - d) / (beta + d)
+
+def A_function(u, tau, theta, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    common_term = np.exp(-d*tau)
+    A_u = (kappa * theta / (sigma**2)) * ((beta-d)*tau - 2*np.log((g*common_term-1) / (g-1)))    
+    return A_u
+
+def B_function(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    common_term = np.exp(-d*tau)
+    B_u = ((beta-d) / (sigma**2)) * ((1 - common_term) / (1 - g*common_term))
+    return B_u
+def heston_charact_funct(u, tau, theta, sigma, rho, kappa, v0):
+
+    beta = beta_function(u, tau, sigma, rho, kappa)    
+    #alpha_hat = alpha_hat_function(u)    
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    common_term = np.exp(-d*tau)
+    A = A_function(u, tau, theta, sigma, rho, kappa)
+    B = B_function(u, tau, sigma, rho, kappa)
+
+    return np.exp(A + B * v0)
+def integral_price(m, tau, theta, sigma, rho, kappa, v0):
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m)*heston_charact_funct(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return integ
+def call_price(k, tau, S0, r, theta, sigma, rho, kappa, v0):
+    m = np.log(S0/k) + r*tau #log-moneyness forward
+    integ = integral_price(m, tau, theta, sigma, rho, kappa, v0)  
+    price = S0 - k * np.exp(-r*tau) * integ  /np.pi
+         
+    return price
+def put_price(k, tau, S0, r, theta, sigma, rho, kappa, v0):
+    price = call_price(k, tau, S0, r, theta, sigma, rho, kappa, v0)- S0 + k * np.exp(-r*tau)
+    return price
+def norm_forw_put_price(lm, r, tau, theta, sigma, rho, kappa, v0):
+    m = lm + r*tau #log-moneyness forward
+    integ = integral_price(m, tau, theta, sigma, rho, kappa, v0)
+    return 1 - (1/np.pi) * integ
+def integral_delta(m, tau, theta, sigma, rho, kappa, v0):
+    integrand = (lambda u: 
+        np.real((1j*u + 0.5) * np.exp((1j*u + 0.5)*m)*heston_charact_funct(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return integ
+def term_interm_theta(u, tau, sigma, rho, theta, kappa, v0):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+
+    term1 = kappa*theta * (beta-d+2*((d*g*np.exp(-d*tau)) / ((g*np.exp(-d*tau))-1))) /(sigma**2)
+    term2 = v0*(beta-d)*d * np.exp(-d*tau)*(1-g)/((sigma**2)*(1-g*np.exp(-d*tau))**2)
+    term = term1 + term2
+
+    return term    
+def integral_differential_phi_tau(m, tau, sigma, rho, theta, kappa, v0):
+
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m)*heston_charact_funct(u - 0.5j, tau, theta, sigma, rho, kappa, v0) * 
+                term_interm_theta(u - 0.5j, tau, sigma, rho, theta, kappa, v0))  /(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return integ
+def differential_wrt_theta(lm, r, tau, theta, sigma, rho, kappa, v0):
+    m = lm + r * tau     #log-moneyness forward
+    if theta == 0.:
+        theta = 0.00000001
+    
+    integrand = (lambda u: 
+        np.real((1/theta) * np.exp((1j*u + 0.5)*m)* A_function(u - 0.5j, tau, theta, sigma, rho, kappa) * heston_charact_funct(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return (-1/np.pi) * integ
+def differential_wrt_lm(lm, r, tau, theta, sigma, rho, kappa, v0):
+    m = lm + r * tau #log-moneyness forward
+    res = - (1/np.pi) * integral_delta(m, tau, theta, sigma, rho, kappa, v0)
+    return res
+def differential_wrt_v0(lm, r, tau, theta, sigma, rho, kappa, v0):    
+    m = lm + r * tau #log-moneyness forward
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m)* B_function(u - 0.5j, tau, sigma, rho, kappa) * heston_charact_funct(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return (-1/np.pi) * integ
+def differential_wrt_tau(lm, r, tau, theta, sigma, rho, kappa, v0):    
+    m = lm + r * tau #log-moneyness forward
+    integ1 = integral_delta(m, tau, theta, sigma, rho, kappa, v0)
+    integ2 = integral_differential_phi_tau(m, tau, sigma, rho, theta, kappa, v0)   
+
+    return (-1/np.pi) * (r * integ1 + integ2)
+def differential_A_kappa(u, tau, theta, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    A_u = A_function(u, tau, theta, sigma, rho, kappa)
+
+    res = A_u/kappa - (kappa * theta / (d * (sigma**2))) * (-d*tau+tau*beta+4*g/(g-1)+2*g*np.exp(-d*tau)*(2+tau*beta)/(1-g*np.exp(-d*tau)))
+    return res
+
+
+def differential_B_kappa(u, tau, theta, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    B_u = B_function(u, tau, sigma, rho, kappa) 
+
+    res = -B_u/d + (1/d) * (tau*beta*np.exp(-d*tau)*B_u/(1-np.exp(-d*tau)) - g*np.exp(-d*tau)*(2+tau*beta)*B_u/(1-g*np.exp(-d*tau)))
+    return res
+
+def differential_phi_kappa(u, tau, theta, sigma, rho, kappa, v0):
+    return heston_charact_funct(u, tau, theta, sigma, rho, kappa, v0) * (differential_A_kappa(u, tau, theta, sigma, rho, kappa) +
+                                                                         v0 * differential_B_kappa(u, tau, theta, sigma, rho, kappa))
+def differential_wrt_kappa(lm, r, tau, theta, sigma, rho, kappa, v0): 
+    m = lm + r*tau   #log-moneyness forward   
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m) * differential_phi_kappa(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return (-1/np.pi) * integ   
+
+def differential_A_rho(u, tau, theta, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+
+    res = (kappa*theta*1j*u/(d*sigma)) * (tau*(beta-d)-2*g*(np.exp(-d*tau)*(2+tau*beta)/(g*np.exp(-d*tau)-1)-2/(g-1)))
+    return res 
+
+
+def differential_B_rho(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    B_u = B_function(u, tau, sigma, rho, kappa) 
+
+    res = (1j*u*sigma*B_u/d) * (1+np.exp(-d*tau)*(-tau*beta/(1-np.exp(-d*tau))+g*(2+tau*beta)/(1-g*np.exp(-d*tau))))
+    return res
+
+
+def differential_phi_rho(u, tau, theta, sigma, rho, kappa, v0):
+    return heston_charact_funct(u, tau, theta, sigma, rho, kappa, v0) * (differential_A_rho(u, tau, theta, sigma, rho, kappa) +
+                                                                         v0 * differential_B_rho(u, tau, sigma, rho, kappa))
+
+def differential_wrt_rho(lm, r, tau, theta, sigma, rho, kappa, v0):
+    m = lm + r*tau  #log-moneyness forward
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m) * differential_phi_rho(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return (-1/np.pi) * integ   
+
+def differential_ln_sigma(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    alpha_hat = alpha_hat_function(u)    
+
+    res= ((2j*u*rho*((beta**2)-(d**2))+4*beta*alpha_hat*sigma)*((g-1)*np.exp(-d*tau)-g*np.exp(-d*tau)+1)+
+          (g-1)*np.exp(-d*tau)*tau*g*((beta+d)**2)*(1j*u*rho*beta+2*alpha_hat*sigma))/(d*((beta+d)**2)*(g-1)*(g*np.exp(-d*tau)-1))
+    return res
+
+def differential_A_sigma(u, tau, theta, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    A_u = A_function(u, tau, theta, sigma, rho, kappa)
+    diff_ln_sigma = differential_ln_sigma(u, tau, sigma, rho, kappa)
+    alpha_hat = alpha_hat_function(u)
+
+    res = -2*A_u/sigma + kappa*theta/(sigma**2)*(-1j*u*tau*rho+tau*(1j*u*rho*beta+2*alpha_hat*sigma)/d - 2*diff_ln_sigma)
+    return res 
+
+
+def differential_quotient_sigma(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    alpha_hat = alpha_hat_function(u)
+
+    res = ((np.exp(-d*tau)*(1j*u*rho*beta+2*alpha_hat*sigma))*(-tau*((beta+d)**2)*(1-g*np.exp(-d*tau))+(1-np.exp(-d*tau))*(2*beta+tau*g*((beta+d)**2)))
+     - 2j*u*rho*(d**2)*np.exp(-d*tau)*(1-np.exp(-d*tau))) / (d*((beta+d)**2)*((1-g*np.exp(-d*tau))**2))
+    return res
+
+
+def differential_B_sigma(u, tau, sigma, rho, kappa):
+    beta = beta_function(u, tau, sigma, rho, kappa)
+    d = d_function(u, tau, sigma, rho, kappa)
+    g = g_function(u, tau, sigma, rho, kappa)
+    alpha_hat = alpha_hat_function(u)
+    
+    diff_quot_sigma = differential_quotient_sigma(u, tau, sigma, rho, kappa)
+    res = ((1-np.exp(-d*tau))*(sigma*(-1j*u*rho*d+1j*u*rho*beta+2*alpha_hat*sigma)-2*d*(beta-d))) / (d*(sigma**3)*(1-g*np.exp(-d*tau))) + (beta-d)/(sigma**2)*diff_quot_sigma
+    return res
+
+def differential_phi_sigma(u, tau, theta, sigma, rho, kappa, v0):
+    return heston_charact_funct(u, tau, theta, sigma, rho, kappa, v0) * (differential_A_sigma(u, tau, theta, sigma, rho, kappa) +
+                                                                         v0 * differential_B_sigma(u, tau, sigma, rho, kappa))
+
+
+def differential_wrt_sigma(lm, r, tau, theta, sigma, rho, kappa, v0):  
+    m = lm + r*tau  #log-moneyness forward      
+    integrand = (lambda u: 
+        np.real(np.exp((1j*u + 0.5)*m) * differential_phi_sigma(u - 0.5j, tau, theta, sigma, rho, kappa, v0))/(u**2 + 0.25))
+
+    integ, err = quad_vec(integrand, 0, np.inf)
+    return (-1/np.pi) * integ   
+
+
+def differential_wrt_r(lm, r, tau, theta, sigma, rho, kappa, v0):
+    diff_wrt_lm = differential_wrt_lm(lm, r, tau, theta, sigma, rho, kappa, v0)
+    return tau * diff_wrt_lm
+
+
+df_feller = pd.read_csv("data//dataset_100K_feller.csv")
+
+def gradient(lm, r, tau, theta, sigma, rho, kappa, v0):
+    func_names = ["lm", "r", "tau", "theta", "sigma", "rho", "kappa", "v0"]
+    res = []
+    for f in func_names:
+        res.append(globals()[f"differential_wrt_{f}"](lm, r, tau, theta, sigma, rho, kappa, v0))
+
+    return np.array(res)
+
+def compute_task(ki, kj, data, h, progress_counter, total_rows):
+    func_names = ["lm", "r", "tau", "theta", "sigma", "rho", "kappa", "v0"]
+    col_name = f"d2_{func_names[ki]}_{func_names[kj]}"
+    # data[col_name] = 0.0  # Initialize the column
+    result_col = []
+    # Create a progress bar for the current subtask
+    with tqdm(total=total_rows, desc=f"Task {ki}-{kj}", position=1, ncols=100) as task_pbar:
+        # Iterate over the rows of the dataframe to compute finite differences
+        for idx, row in data.iterrows():
+            # Compute finite difference
+            row_plus_h = row.copy()
+
+            # Perturb variable `j` by `h`
+            row_plus_h[func_names[kj]] += h
+
+            # Compute gradients with perturbed and original rows
+            grad_ij_plus_h = gradient(*row_plus_h[:8])  # Gradient at x + h
+            grad_ij = gradient(*row[:8])  # Gradient at x
+
+            # Approximate second-order partial derivative
+            second_order = (grad_ij[ki] - grad_ij_plus_h[ki]) / h
+            data.at[idx, col_name] = second_order
+            result_col.append(second_order)
+
+            # Update progress_counter for shared progress
+            progress_counter.value += 1
+
+            # Update the progress bar for the current task
+            task_pbar.update(1)
+
+        # If i != j, mirror the value for symmetry
+        if ki != kj:
+            col_name_sym = f"d2_{func_names[kj]}_{func_names[ki]}"
+            data[col_name_sym] = data[col_name]
+
+        task_df = pd.DataFrame({col_name: result_col})
+
+        # Save the result as a CSV file
+        task_df.to_csv(f"data//{col_name}.csv", index=False)
+    # Once task is done, we can update the overall progress bar
+    return f"Finish task {ki}-{kj}!"
+
+def hessian_parallel(data):
+    func_names = ["lm", "r", "tau", "theta", "sigma", "rho", "kappa", "v0"]
+    h = 1e-5
+    
+    # Total number of tasks
+    tasks = [
+        (ki, kj, data, h) 
+        for ki, i in enumerate(func_names) 
+        for kj, j in enumerate(func_names) if ki <= kj
+    ]
+    
+    # Create a manager for shared memory
+    with Manager() as manager:
+        # Shared counter for progress
+        progress_counter = manager.Value('i', 0)
+        total_rows = len(data)
+        # Create a tqdm progress bar to track the overall progress
+        with ProcessPoolExecutor() as executor:
+            print("Starting tasks...")
+            futures = []
+            
+            # Submit tasks to executor
+            for ki, kj, data, h in tasks:
+                future = executor.submit(compute_task, ki, kj, data, h, progress_counter, total_rows)
+                futures.append(future)
+
+            # Monitor overall progress
+            with tqdm(total=len(tasks), desc="Overall progress", ncols=100, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [Elapsed: {elapsed} < {remaining}, {rate_fmt}]") as overall_pbar:
+                for future in as_completed(futures):
+                    future.result()  # Ensure the task is done
+                    overall_pbar.update(1)
+
+    print("Hessian computation complete.")
+    return data
+
+d2_feller = hessian_parallel(df_feller[:10000])
+d2_feller.to_csv("data//dataset_100K_feller_new.csv", index=False)
+
+df_feller_10K = df_feller.iloc[:10000]
+d2_col = ["lm", "r", "tau", "theta", "sigma", "rho", "kappa", "v0"]
+for i in d2_col:
+    for j in d2_col:
+        fname = f"data//d2_{i}_{j}.csv"
+        colname = f"d2_{i}_{j}"
+        if os.path.exists(fname):
+            d2_data = pd.read_csv(f"data//d2_{i}_{j}.csv")
+
+            df_feller_10K= pd.concat([df_feller_10K,d2_data], axis=1)
+
+df_feller_10K.to_csv("data//feller_d2.csv", index=False)
+
+second_differentials = df_feller_10K.iloc[:,-36:]
+pca_d2 = PCA()
+# Z-Score Normalization
+normalized_zscore = (second_differentials - second_differentials.mean()) / second_differentials.std()
+
+pca_d2.fit(normalized_zscore)
+plt.plot(np.cumsum(pca_d2.explained_variance_ratio_))
+plt.title("Cumulative Explained Variance Ratio")
+plt.xlabel("Number of eigenfunctions")
+plt.ylabel("Explained Variance Ratio")
+plt.hlines(0.9,xmin=0,xmax=36,linestyles='--',colors='r')
+plt.savefig("results//explained_variance_ratio.png")
+
+
+pca_d2 = PCA(n_components=15)
+second_differential_label = pca_d2.fit_transform(normalized_zscore[:9000])
+feller_data = pd.read_csv('data//feller_d2.csv')
+feller_testing = feller_data.iloc[9000:]
+feller_data = feller_data.iloc[:9000]
+
+training_col = feller_data.columns[:8]
+training_target = feller_data.columns[9]
+network_inputs = feller_data[training_col].values
+network_outputs = feller_data[training_target].values
+
+func_names = ["lm", "r", "tau", "theta", "sigma", "rho", "kappa", "v0"]
+network_inputs = feller_data[func_names]
+option_prices = feller_data['P_hat']
+network_first_order = feller_data[[f"diff wrt {col}" for col in func_names]].values
+sec_order_names = []
+for i in func_names:
+    for j in func_names:
+        if os.path.exists(f"data//d2_{i}_{j}.csv"):
+            sec_order_names.append(f"d2_{i}_{j}")
+network_second_order = feller_data[[f"{col}" for col in sec_order_names]].values
