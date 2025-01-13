@@ -49,7 +49,7 @@ In this repository, you will find:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-repo/DML-Heston-DiffPCA.git
+   git clone https://github.com/wongpc0817/DML-Heston-DiffPCA.git
    cd DML-Heston-DiffPCA
 
 2. Install dependencies: 
