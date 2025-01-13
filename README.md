@@ -3,7 +3,9 @@
 In this project, Differential Machine Learning (DML) was applied to price European Options, using the computationally efficient version of Heston model. In addition, Differential Principle Components Analysis (Diff-PCA) was designed to improve the performance.
 
 Motivation:
+<p>
 Our goal is to train a feedforward neural network that takes in Heston parameters and prices a European option. However in other applications, the first derivatives (Delta) is often useful in hedging applications. Its computation is efficient by virtue of Automatic Differentiation, but it is not involved in the training. The original scheme of DML therefore takes into account the first order differentials, however it remains a theoretical question whether higher order differentials can be examined under the same principle. 
+</p>
 
 Our contribution is therefore to extend the training scheme to incorporate the second order differentials. Under this scheme, any higher order differentials (and any asset price models) can easily be designed using this scheme. We also recognize the exponential computational surge in this results and therefore introduce the Differential PCA, aimed to reduce the computational cost while maintaining a reasonable performance. 
 
