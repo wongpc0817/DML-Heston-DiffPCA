@@ -66,7 +66,7 @@ In this repository, you will find:
 
 
 ---
-References:
+## References:
 1. Fischer Black and Myron Scholes. *The pricing of options and corporate liabilities*. Journal of Political Economy, 81(3):637–654, 1973.
 2. Benzion Boukai. *On the class of risk neutral densities under Heston’s stochastic volatility model for option valuation*. Mathematics, 11(9):2124, Apr 2023.
 3. Damiano Brigo and Fabio Mercurio. *Interest Rate Models — Theory and Practice: With Smile, Inflation and Credit*. Springer Finance, 01 2006.
