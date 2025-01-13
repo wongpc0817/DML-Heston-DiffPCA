@@ -62,3 +62,23 @@ In this repository, you will find:
     Start with data_generation.ipynb to create the dataset.
     Proceed to model_training.ipynb for training.
     Use model_testing.ipynb for performance evaluation.
+
+
+
+---
+References:
+1. Fischer Black and Myron Scholes. *The pricing of options and corporate liabilities*. Journal of Political Economy, 81(3):637–654, 1973.
+2. Benzion Boukai. *On the class of risk neutral densities under Heston’s stochastic volatility model for option valuation*. Mathematics, 11(9):2124, Apr 2023.
+3. Damiano Brigo and Fabio Mercurio. *Interest Rate Models — Theory and Practice: With Smile, Inflation and Credit*. Springer Finance, 01 2006.
+4. John C. Cox, Jonathan E. Ingersoll, and Stephen A. Ross. *A theory of the term structure of interest rates*. Econometrica, 53(2):385–407, 1985.
+5. John C. Cox and Stephen A. Ross. *The valuation of options for alternative stochastic processes*. Journal of Financial Economics, 3(1):145–166, 1976.
+6. Magnus Grønnegaard Frandsen, Tobias Cramer Pedersen, and Rolf Poulsen. *Delta force: option pricing with differential machine learning*. Digital Finance, 4:1–15, 2021.
+7. Pedro Duarte Gomes. *Mathematics of differential machine learning in derivative pricing and hedging*, 2024.
+8. Brian Huge and Antoine Savine. *Differential machine learning*, 2020.
+9. Seung-Jean Kim, Kwangmoo Koh, Stephen Boyd, and Dimitry Gorinevsky. *ℓ1 trend filtering*. SIAM Review, 51(2):339–360, 2009.
+10. Giovanni Leoni. *A first course in Sobolev spaces*. American Mathematical Society, 01 2009.
+11. Alexander Lipton. *Mathematical methods for foreign exchange: A financial engineer’s approach*. Mathematical methods for foreign exchange, Oct 2001.
+12. W. Rudin. *Functional Analysis*. International series in pure and applied mathematics. Tata McGraw-Hill, 1974.
+13. Abir Sridi and Paul Bilokon. *Applying deep learning to calibrate stochastic volatility models*, 2023.
+14. Po-Chai Wong and Jeff Chak-Fu Wong. *A modified hybrid RBF-BP network classifier for nonlinear estimation/classification and its applications*. In Chutiporn Anutariya and Marcello M. Bonsangue, editors, *Data Science and Artificial Intelligence*, pages 43–56, Singapore, 2023. Springer Nature Singapore.
+
