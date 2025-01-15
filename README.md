@@ -8,7 +8,7 @@ In this project, **Differential Machine Learning (DML)** was applied to price Eu
 
 ## Motivation:
 <p>
-Our goal is to train a feedforward neural network that takes in Heston parameters and prices a European option. However in other applications, the first derivatives (Delta) are often useful (e.g. hedging). Although their computation is efficient by virtue of Automatic Differentiation, it is usually excluded in the training. The original scheme of DML therefore takes into account the first order differentials as a training target, however it remains a theoretical question whether higher order differentials can be examined under the same principle. 
+Our goal is to train a feedforward neural network that takes in Heston parameters and prices a European option. However in other applications, the first derivatives (Delta) are often useful (e.g. hedging). Although their computation is efficient by virtue of Automatic Differentiation, they are usually excluded in the training. The original scheme of DML therefore takes into account the first order differentials as a training target, however it remains a theoretical question whether higher order differentials can be examined under the same principle. 
 </p>
 
 ### Key Contributions:
